@@ -1,108 +1,79 @@
-# Get default values for FLYCAPTURE_ROOT and FLYCAPTURE_LAYOUT
+###############################################################################
+# Find OpenNI 2
+#
+# This sets the following variables:
+# OPENNI2_FOUND - True if OPENNI 2 was found.
+# OPENNI2_INCLUDE_DIRS - Directories containing the OPENNI 2 include files.
+# OPENNI2_LIBRARIES - Libraries needed to use OPENNI 2.
+# OPENNI2_DEFINITIONS - Compiler flags for OPENNI 2.
+#
+# For libusb-1.0, add USB_10_ROOT if not found
 
-# Prefer building 64 bit binaries on Windows. If you prefer building
-# 32 bit binaries on 64 bit machines, set this to FALSE.
-SET(PREFER_64_BIT FALSE)
+find_package(PkgConfig QUIET)
 
-IF(WIN32)
-  IF(EXISTS "C:\\Program Files\\Point Grey Research\\FlyCapture2" AND PREFER_64_BIT)
-    SET(FLYCAPTURE_ROOT "C:\\Program Files\\Point Grey Research\\FlyCapture2")
-  ELSE(EXISTS "C:\\Program Files\\Point Grey Research\\FlyCapture2" AND PREFER_64_BIT)
-    IF(EXISTS "C:\\Program Files (x86)\\Point Grey Research\\FlyCapture2")
-      # Maybe we're on 64bit but have 32bit SDK installed.
-      SET(FLYCAPTURE_ROOT "C:\\Program Files (x86)\\Point Grey Research\\FlyCapture2")
-    ELSE(EXISTS "C:\\Program Files (x86)\\Point Grey Research\\FlyCapture2")
-      # If not, default to "C:\Program Files".
-      SET(FLYCAPTURE_ROOT "C:\\Program Files\\Point Grey Research\\FlyCapture2")
-    ENDIF(EXISTS "C:\\Program Files (x86)\\Point Grey Research\\FlyCapture2")
-  ENDIF(EXISTS "C:\\Program Files\\Point Grey Research\\FlyCapture2" AND PREFER_64_BIT)
-ELSE(WIN32)
-  # Assume headers and libraries are installed in FHS locations
-  SET(FLYCAPTURE_ROOT "/usr")
-ENDIF(WIN32)
+# Find LibUSB
+if(NOT WIN32)
+  pkg_check_modules(PC_USB_10 libusb-1.0)
+  find_path(USB_10_INCLUDE_DIR libusb-1.0/libusb.h
+            HINTS ${PC_USB_10_INCLUDEDIR} ${PC_USB_10_INCLUDE_DIRS} "${USB_10_ROOT}" "$ENV{USB_10_ROOT}"
+            PATH_SUFFIXES libusb-1.0)
 
-# defaults for FLYCAPTURE_LAYOUT
-IF(WIN32)
-  SET(FLYCAPTURE_LAYOUT "flycapture")
-ELSE(WIN32)
-  # Assume headers and libraries are installed in FHS locations
-  SET(FLYCAPTURE_LAYOUT "FHS")
-ENDIF(WIN32)
+  find_library(USB_10_LIBRARY
+               NAMES usb-1.0
+               HINTS ${PC_USB_10_LIBDIR} ${PC_USB_10_LIBRARY_DIRS} "${USB_10_ROOT}" "$ENV{USB_10_ROOT}"
+               PATH_SUFFIXES lib)
 
-#############################################
-# Environment variable overrides
+  include(FindPackageHandleStandardArgs)
+  find_package_handle_standard_args(USB_10 DEFAULT_MSG USB_10_LIBRARY USB_10_INCLUDE_DIR)
 
-SET(FLYCAPTURE_TEST_INCLUDE_PATHS "$ENV{FLYCAPTURE_TEST_INCLUDE_PATHS}")
-IF(FLYCAPTURE_TEST_INCLUDE_PATHS STREQUAL "")
-  # not set with env var, use defaults
-  SET(FLYCAPTURE_TEST_INCLUDE_PATHS "${FLYCAPTURE_ROOT}/include/flycapture" "${FLYCAPTURE_ROOT}/include" )
-ENDIF(FLYCAPTURE_TEST_INCLUDE_PATHS STREQUAL "")
+  if(NOT USB_10_FOUND)
+    message(STATUS "OpenNI 2 disabled because libusb-1.0 not found.")
+    return()
+  else()
+    include_directories(SYSTEM ${USB_10_INCLUDE_DIR})
+  endif()
+endif(NOT WIN32)
 
+if(${CMAKE_VERSION} VERSION_LESS 2.8.2)
+  pkg_check_modules(PC_OPENNI2 libopenni2)
+else()
+  pkg_check_modules(PC_OPENNI2 QUIET libopenni2)
+endif()
 
+set(OPENNI2_DEFINITIONS ${PC_OPENNI_CFLAGS_OTHER})
 
-SET(FLYCAPTURE_TEST_LIB_PATHS "$ENV{FLYCAPTURE_TEST_LIB_PATHS}")
-IF(FLYCAPTURE_TEST_LIB_PATHS STREQUAL "")
-  # not set with env var, use defaults
-  IF(FLYCAPTURE_LAYOUT STREQUAL "flycapture")
-    IF(PREFER_64_BIT)
-      IF(EXISTS ${FLYCAPTURE_ROOT}/lib64)
-        SET(FLYCAPTURE_TEST_LIB_PATHS ${FLYCAPTURE_ROOT}/lib64)
-        MESSAGE("building FlyCapture2 64-bit backend")
-      ELSE(EXISTS ${FLYCAPTURE_ROOT}/lib64)
-        SET(FLYCAPTURE_TEST_LIB_PATHS ${FLYCAPTURE_ROOT}/lib)
-        MESSAGE("building FlyCapture2 32-bit backend")
-      ENDIF(EXISTS ${FLYCAPTURE_ROOT}/lib64)
-    ELSE(PREFER_64_BIT)
-      IF(EXISTS ${FLYCAPTURE_ROOT}/lib)
-        SET(FLYCAPTURE_TEST_LIB_PATHS ${FLYCAPTURE_ROOT}/lib)
-        MESSAGE("building FlyCapture2 32-bit backend")
-      ELSE(EXISTS ${FLYCAPTURE_ROOT}/lib)
-        SET(FLYCAPTURE_TEST_LIB_PATHS ${FLYCAPTURE_ROOT}/lib64)
-        MESSAGE("building FlyCapture2 64-bit backend")
-      ENDIF(EXISTS ${FLYCAPTURE_ROOT}/lib)
-    ENDIF(PREFER_64_BIT)
-  ELSE(FLYCAPTURE_LAYOUT STREQUAL "flycapture")
-    IF(NOT FLYCAPTURE_LAYOUT STREQUAL "FHS")
-      MESSAGE(FATAL_ERROR "unknown FLYCAPTURE_LAYOUT " ${FLYCAPTURE_LAYOUT})
-    ENDIF(NOT FLYCAPTURE_LAYOUT STREQUAL "FHS")
-    SET(FLYCAPTURE_TEST_LIB_PATHS ${FLYCAPTURE_ROOT}/lib)
-  ENDIF(FLYCAPTURE_LAYOUT STREQUAL "flycapture")
-ENDIF(FLYCAPTURE_TEST_LIB_PATHS STREQUAL "")
+set(OPENNI2_SUFFIX)
+if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(OPENNI2_SUFFIX 64)
+endif(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
 
-#############################################
-# No more environment variable settings
-
-IF(NOT "$ENV{FLYCAPTURE_CMAKE_DEBUG}" STREQUAL "")
-  MESSAGE("FLYCAPTURE_TEST_INCLUDE_PATHS " ${FLYCAPTURE_TEST_INCLUDE_PATHS})
-  MESSAGE("FLYCAPTURE_TEST_LIB_PATHS " ${FLYCAPTURE_TEST_LIB_PATHS})
-ENDIF(NOT "$ENV{FLYCAPTURE_CMAKE_DEBUG}" STREQUAL "")
-
-FIND_PATH(FLYCAPTURE_INCLUDE_PATH FlyCapture2.h
-  ${FLYCAPTURE_TEST_INCLUDE_PATHS}
+find_path(OPENNI2_INCLUDE_DIRS OpenNI.h
+    PATHS
+    "$ENV{OPENNI2_INCLUDE${OPENNI2_SUFFIX}}"  # Win64 needs '64' suffix
+    /usr/include/openni2  # common path for deb packages
 )
 
+find_library(OPENNI2_LIBRARY
+             NAMES OpenNI2  # No suffix needed on Win64
+             libOpenNI2     # Linux
+             PATHS "$ENV{OPENNI2_LIB${OPENNI2_SUFFIX}}"  # Windows default path, Win64 needs '64' suffix
+             "$ENV{OPENNI2_REDIST}"                      # Linux install does not use a separate 'lib' directory
+             )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  set(OPENNI2_LIBRARIES ${OPENNI2_LIBRARY} ${LIBUSB_1_LIBRARIES})
+else()
+  set(OPENNI2_LIBRARIES ${OPENNI2_LIBRARY})
+endif()
 
-IF( MSVC )
-	SET( FLYCAPTURE_MSVC_VERSION 60 )
-	SET( TEMP_MSVC_VERSION 1299 )
-	WHILE( ${MSVC_VERSION} GREATER ${TEMP_MSVC_VERSION} )
-	  MATH( EXPR FLYCAPTURE_MSVC_VERSION "${FLYCAPTURE_MSVC_VERSION} + 10" )
-	  MATH( EXPR TEMP_MSVC_VERSION "${TEMP_MSVC_VERSION} + 100" )
-	ENDWHILE( ${MSVC_VERSION} GREATER ${TEMP_MSVC_VERSION} )
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(OpenNI2 DEFAULT_MSG OPENNI2_LIBRARY OPENNI2_INCLUDE_DIRS)
 
-	SET(FLYCAPTURE_LIBRARY_NAMES flycapture2_v${FLYCAPTURE_MSVC_VERSION})
-ELSE( MSVC )
-	SET(FLYCAPTURE_LIBRARY_NAMES flycapture flycapture2)
-ENDIF( MSVC )
+mark_as_advanced(OPENNI2_LIBRARY OPENNI2_INCLUDE_DIRS)
 
-MESSAGE(STATUS "Looking for QTKitCapture Library Names: ${FLYCAPTURE_LIBRARY_NAMES}")
-
-FIND_LIBRARY(FLYCAPTURE_LIBRARY NAMES ${FLYCAPTURE_LIBRARY_NAMES} HINTS ${FLYCAPTURE_TEST_LIB_PATHS})
-
-INCLUDE(FindPackageHandleStandardArgs)
-FIND_PACKAGE_HANDLE_STANDARD_ARGS(FLYCAPTURE DEFAULT_MSG
-                                             FLYCAPTURE_INCLUDE_PATH
-                                             FLYCAPTURE_LIBRARY)
-SET(FLYCAPTURE_LIBRARIES ${FLYCAPTURE_LIBRARY})
-SET(FLYCAPTURE_INCLUDE_DIRS ${FLYCAPTURE_INCLUDE_PATH})
+if(OPENNI2_FOUND)
+  # Add the include directories
+  set(OPENNI2_INCLUDE_DIRS ${OPENNI2_INCLUDE_DIR})
+  set(OPENNI2_REDIST_DIR $ENV{OPENNI2_REDIST${OPENNI2_SUFFIX}})
+  message(STATUS "OpenNI 2 found (include: ${OPENNI2_INCLUDE_DIRS}, lib: ${OPENNI2_LIBRARY}, redist: ${OPENNI2_REDIST_DIR})")
+endif(OPENNI2_FOUND)

@@ -34,6 +34,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <vector>
 #include <algorithm>
 #include <utDataflow/ComponentFactory.h>
 #include <utUtil/OS.h>
@@ -45,23 +46,39 @@ namespace Ubitrack { namespace Drivers {
 // get a logger
 static log4cpp::Category& logger( log4cpp::Category::getInstance( "Ubitrack.Vision.OpenNI2FrameGrabber" ) );
 
+
 using namespace Ubitrack;
 using namespace Ubitrack::Vision;
 using namespace Ubitrack::Drivers;
-using namespace FlyCapture2;
+using namespace openni;
 
+// static int to initialize/deinitialize openni only once.
+bool OpenNI2Module::m_openni_initialized_count = 0;
 
-OpenNI2Module::OpenNI2Module( const Dataflow::SingleModuleKey& moduleKey, boost::shared_ptr< Graph::UTQLSubgraph > subgraph, FactoryHelper* pFactory )
-        : Module< Dataflow::SingleModuleKey, OpenNI2ComponentKey, OpenNI2Module, OpenNI2Component >( moduleKey, pFactory )
+OpenNI2Module::OpenNI2Module( const OpenNi2ModuleKey& moduleKey, boost::shared_ptr< Graph::UTQLSubgraph > subgraph, FactoryHelper* pFactory )
+        : Module< OpenNi2ModuleKey, OpenNI2ComponentKey, OpenNI2Module, OpenNI2Component >( moduleKey, pFactory )
+		, m_device_url(m_moduleKey.get())
+		, m_timeout( 2000 ) // 2000ms
         , m_bStop(false)
 {
+	if (m_openni_initialized == 0) {
+		Status rc = OpenNI::initialize();
+		if (rc != STATUS_OK)
+		{
+			UBITRACK_THROW( "OpenNI2 Initialize failed: " + OpenNI::getExtendedError() );
+		}
+	}
+	m_openni_initialized_count++;
+}
+
+OpenNI2Module::startModule() {
 
 	// start thread immediately - it will not send images if the module is not running ..
 	m_Thread.reset( new boost::thread( boost::bind( &OpenNI2Module::ThreadProc, this ) ) );
+
 }
 
-OpenNI2Module::~OpenNI2Module()
-{
+OpenNI2Module::stopModule() {
 	// may need a lock here ...
 	if ( m_Thread )
 	{
@@ -71,103 +88,105 @@ OpenNI2Module::~OpenNI2Module()
 }
 
 
+OpenNI2Module::~OpenNI2Module()
+{
+	if (m_running) {
+		stopModule();
+	}
+
+	m_openni_initialized_count--;
+
+	if (m_openni_initialized == 0) {
+		Status rc = OpenNI::shutdown();
+		if (rc != STATUS_OK)
+		{
+			LOG4CPP_ERROR( logger, "OpenNI2 Shutdown failed: " + OpenNI::getExtendedError() );
+		}
+	}
+
+}
+
+
 void OpenNI2Module::ThreadProc()
 {
-	
-	LOG4CPP_DEBUG( logger, "Thread started" );
+	LOG4CPP_DEBUG( logger, "OpenNI2 Thread started" );
 
-	// initialize FlyCapture
-	BusManager busMgr;
-	unsigned nCameras;
-	if ( busMgr.GetNumOfCameras( &nCameras ) != PGRERROR_OK || nCameras == 0 )
+	const char* devurl = ANY_DEVICE;
+	if (!m_device_url.empty()) {
+		devurl = m_device_url.c_str();
+	}
+
+	Status rc = m_device.open(devurl);
+	if (rc != STATUS_OK)
 	{
-		LOG4CPP_ERROR( logger, "No PointGrey cameras found!" );
+		LOG4CPP_ERROR( logger, "Couldn't open device: " + OpenNI::getExtendedError() );
 		return;
 	}
-	
-	
-    ComponentList allComponents( getAllComponents() );
-	
-	if (nCameras < allComponents.size()) {
-		LOG4CPP_ERROR( logger, "Not enough PointGrey cameras found for current config!" );
-		return;	
+
+
+	int index = 0;
+	ComponentList allComponents( getAllComponents() );
+	std::vector< VideoStream* > connected_streams;
+	std::vector< ComponentKey > connected_components;
+
+	for ( ComponentList::iterator it = allComponents.begin(); it != allComponents.end(); it++ ) {
+		if (m_device.getSensorInfo((*it)->getKey().getSensorType()) != NULL) {
+			VideoStream* stream = new VideoStream();
+
+			rc = stream->create(device, (*it)->getKey().getSensorType());
+			if (rc == STATUS_OK)
+			{
+				rc = depth->start();
+				if (rc != STATUS_OK)
+				{
+					LOG4CPP_ERROR( logger, "Couldn't start the stream" << std::endl << OpenNI::getExtendedError());
+					delete stream;
+					stream = NULL;
+				} else {
+					connected_streams.push_back(stream);
+					connected_components.push_back((*it)->getKey());
+				}
+			}
+			else
+			{
+				LOG4CPP_ERROR( logger, "Couldn't create the stream" << std::endl << OpenNI::getExtendedError());
+				delete stream;
+				stream = NULL;
+			}
+
+		} else {
+			LOG4CPP_WARN( logger, "Device has no sensor with type: " << (*it)->getKey().getSensorType());
+		}
 	}
 
-	Camera** ppCameras = new Camera*[allComponents.size()];
-    int index = 0;
+	VideoFrameRef frame;
 
-    for ( ComponentList::iterator it = allComponents.begin(); it != allComponents.end(); it++ ) {
-
-		ppCameras[index] = new Camera();
-
-		unsigned int serial = (*it)->getKey().getCameraSerialNumber();
-		PGRGuid guid;
-
-		if (serial >= 0) {
-			if ( busMgr.GetCameraFromSerialNumber((unsigned int) serial, &guid) != PGRERROR_OK )
-			{
-				LOG4CPP_ERROR( logger, "Error in FlyCapture2::BusManager::GetCameraFromSerialNumber" );
-				return;
-			}
-		} else {
-			LOG4CPP_ERROR( logger, "Invalid Serial specified for Camera!" );
-			return;
-		}
-		
-		if ( ppCameras[index]->Connect( &guid ) != PGRERROR_OK )
-		{
-			LOG4CPP_ERROR( logger, "Error in FlyCapture2::Camera::Connect" );
-			return;
-		}
-
-		// delegate setup to component
-		(*it)->setupCamera(index, ppCameras[index]);
-
-    }	
-	
-	if( Camera::StartSyncCapture( allComponents.size(), (const Camera**)ppCameras ) != PGRERROR_OK)
-    {
-		LOG4CPP_ERROR( logger, "Error in FlyCapture2::Camera::StartSyncCapture" );
-        return;
-    }
-	
 	while ( !m_bStop )
 	{
+		int readyStream = -1;
+		rc = OpenNI::waitForAnyStream(&connected_streams[0], connected_streams.size(), &readyStream, m_timeout);
+		Ubitrack::Measurement::Timestamp timestamp = Ubitrack::Measurement::now();
 
-		Measurement::Timestamp ts;
+		if (rc != STATUS_OK)
+		{
+			LOG4CPP_WARN( logger, "Wait failed! " + OpenNI::getExtendedError());
+			break;
+		}
 
-	    for ( ComponentList::iterator it = allComponents.begin(); it != allComponents.end(); it++ ) {
-			int index = (*it)->getCameraIndex();
-			FlyCapture2::Image image;
-
-			if ( ppCameras[index]->RetrieveBuffer( &image ) != PGRERROR_OK )
-			{
-				LOG4CPP_ERROR( logger, "Could not retrieve buffer" );
-				return;
-			}
-			// eventually use the timestamp from the image ??
-			// but for now, set timestamp when captured image from first cam in the list
-			if (it == allComponents.begin()) {
-				ts = Measurement::now();
-			}
-
-			if ( !m_running )
-				continue;
-
-			(*it)->processImage(ts, image);
+		if ((readyStream >= 0) && (readyStream < connected_streams.size())) {
+			connected_streams.at(readyStream)->readFrame(&frame);
+			getComponent( connected_components.at(readyStream) )->processImage(timestamp, frame);
+		} else {
+			LOG4CPP_WARN( logger, "Unknown stream ready for reading ...");
 		}
 	}
 
-    for ( ComponentList::iterator it = allComponents.begin(); it != allComponents.end(); it++ ) {
-			int index = (*it)->getCameraIndex();
-			ppCameras[index]->StopCapture();
-			ppCameras[index]->Disconnect();
-			delete ppCameras[index];
-
+	for (unsigned int i=0; i < connected_streams.size(); ++i) {
+		connected_streams.at(i)->stop();
 	}
 
-	delete [] ppCameras;
-	LOG4CPP_DEBUG( logger, "Thread stopped" );
+	m_device.close();
+	LOG4CPP_DEBUG( logger, "OpenNI2 Thread stopped" );
 }
 
 boost::shared_ptr< OpenNI2Module::ComponentClass > OpenNI2Module::createComponent( const std::string&, const std::string& name, boost::shared_ptr< Graph::UTQLSubgraph> subgraph, const ComponentKey& key, ModuleClass* pModule ) {
@@ -177,168 +196,47 @@ boost::shared_ptr< OpenNI2Module::ComponentClass > OpenNI2Module::createComponen
 
 OpenNI2Component::OpenNI2Component( const std::string& name, boost::shared_ptr< Graph::UTQLSubgraph > subgraph, const OpenNI2ComponentKey& componentKey, OpenNI2Module* pModule )
 	: OpenNI2Module::Component( name, componentKey, pModule )
-	, m_videoMode( FlyCapture2::NUM_VIDEOMODES )
-	, m_frameRate( FlyCapture2::NUM_FRAMERATES )
-	, m_pixelFormat( FlyCapture2::NUM_PIXEL_FORMATS )
-	, m_index( -1 )
-	, m_gainDB( -1 ) // -1 is auto
-	, m_shutterMS( -1 ) // -1 is auto
-	, m_triggerFlash( false )
 	, m_outPort( "Output", *this )
-	, m_colorOutPort( "ColorOutput", *this )
 {
-	subgraph->m_DataflowAttributes.getAttributeData( "gainDB", m_gainDB );
-	subgraph->m_DataflowAttributes.getAttributeData( "shutterMS", m_shutterMS );
-
-	if ( subgraph->m_DataflowAttributes.getAttributeString( "triggerFlash" ) == "true")
-	{
-		m_triggerFlash = true;
-	}
-
-
-	if ( subgraph->m_DataflowAttributes.hasAttribute( "videoMode" ) )
-	{
-		std::string sVideoMode = subgraph->m_DataflowAttributes.getAttributeString( "videoMode" );
-		if ( flyCaptureModeMap.find( sVideoMode ) == flyCaptureModeMap.end() )
-			UBITRACK_THROW( "unknown video mode: \"" + sVideoMode + "\"" );
-		m_videoMode = flyCaptureModeMap[ sVideoMode ];
-	}
-
-	//if ( subgraph->m_DataflowAttributes.hasAttribute( "pixelFormat" ) )
-	//{
-	//	std::string sPixelFormat = subgraph->m_DataflowAttributes.getAttributeString( "pixelFormat" );
-	//	if ( flyCapturePixelFormatMap.find( sPixelFormat ) == flyCapturePixelFormatMap.end() )
-	//		UBITRACK_THROW( "unknown pixel format: \"" + sPixelFormat + "\"" );
-	//	m_pixelFormat = flyCapturePixelFormatMap[ sPixelFormat ];
-	//}
-
-	if ( subgraph->m_DataflowAttributes.hasAttribute( "frameRate" ) )
-	{
-		std::string sFrameRate = subgraph->m_DataflowAttributes.getAttributeString( "frameRate" );
-		if ( flyCaptureFrameRateMap.find( sFrameRate ) == flyCaptureFrameRateMap.end() )
-			UBITRACK_THROW( "unknown frame rate: \"" + sFrameRate + "\"" );
-		m_frameRate = flyCaptureFrameRateMap[ sFrameRate ];
-	}
-	
-	if ( ( m_frameRate != NUM_FRAMERATES ) != ( m_videoMode != NUM_VIDEOMODES ) )
-		LOG4CPP_WARN( logger, "Both videoMode and frameRate must be set for any value to have an effect!" );
 
 }
 
+void OpenNI2Component::processImage( Measurement::Timestamp ts, const openni::VideoFrameRef& frame) {
+	boost::shared_ptr< Vision::Image > pImage;
 
-void OpenNI2Component::setupCamera( int index, FlyCapture2::Camera* cam ) {
-	// store the index locally
-	m_index = index;
-
-	if ( m_frameRate != NUM_FRAMERATES && m_videoMode != NUM_VIDEOMODES )
+	bool new_image_data = false;
+	switch (frame.getVideoMode().getPixelFormat())
 	{
-		LOG4CPP_INFO( logger, "Setting framerate and videomode" );
-		if ( cam->SetVideoModeAndFrameRate( m_videoMode, m_frameRate ) != PGRERROR_OK )
-			LOG4CPP_WARN( logger, "Error in FlyCapture2::Camera::SetVideoModeAndFrameRate" );
+		case PIXEL_FORMAT_DEPTH_1_MM:
+		case PIXEL_FORMAT_DEPTH_100_UM:
+
+			pImage.reset(new Vision::Image(frame.getWidth(), frame.getHeight(), 1));
+			pImage->origin = 0;
+			memcpy(pImage->imageData, (unsigned char*)frame.getData(), frame.getWidth() * frame.getHeight() * 1);
+			new_image_data = true;
+			break;
+
+
+		case PIXEL_FORMAT_RGB888:
+			pImage.reset(new Vision::Image(frame.getWidth(), frame.getHeight(), 3));
+			pImage->origin = 0;
+			pImage->channelSeq[0] = 'R';
+			pImage->channelSeq[1] = 'G';
+			pImage->channelSeq[2] = 'B';
+			memcpy(pImage->imageData, (unsigned char*)frame.getData(), frame.getWidth() * frame.getHeight() * 3);
+			new_image_data = true;
+			break;
+		default:
+			printf("Unknown format\n");
 	}
 
-	if(m_triggerFlash) {
-		// set GPIO to output
-		cam->WriteRegister(0x11f8, 0xe0000000);
-		// set GPIO signal to delay 0 and duration 2 (last 6 bytes)
-		cam->WriteRegister(0x1500, 0x83000003);
-	} else {
-		// how to turn it off?!
-		//cam.WriteRegister(0x1500, 0x83000000);	
+	// undistort and process here ..
+
+	if (new_image_data) {
+		m_outPort.send( Measurement::ImageMeasurement( ts, pImage ) );
+
 	}
 
-	// set gain
-	if(m_gainDB < 0) {
-		Property prop;
-		prop.type = GAIN;
-		prop.onePush = true;
-		prop.onOff = true;
-		prop.autoManualMode = true;
-		prop.valueA = 0;
-		prop.valueB = 0;
-		if ( cam->SetProperty(&prop) != PGRERROR_OK )
-			LOG4CPP_ERROR( logger, "Error setting auto Gain." );
-	} else {
-		Property prop;
-		prop.type = GAIN;
-		prop.onePush = false;
-		prop.onOff = true;
-		prop.autoManualMode = false;
-		prop.absControl = true;
-		prop.absValue = (float)m_gainDB;
-		if ( cam->SetProperty(&prop) != PGRERROR_OK )
-			LOG4CPP_ERROR( logger, "Error setting manual Gain." );
-	}
-
-	// set shutter
-	if(m_shutterMS < 0) {
-		Property prop;
-		prop.type = SHUTTER;
-		prop.onePush = true;
-		prop.onOff = true;
-		prop.autoManualMode = true;
-		prop.valueA = 0;
-		prop.valueB = 0;
-		if ( cam->SetProperty(&prop) != PGRERROR_OK )
-			LOG4CPP_ERROR( logger, "Error setting auto Gain." );
-	} else {
-		Property prop;
-		prop.type = SHUTTER;
-		prop.onePush = false;
-		prop.onOff = true;
-		prop.autoManualMode = false;
-		prop.absControl = true;
-		prop.absValue = (float)m_shutterMS;
-		if ( cam->SetProperty(&prop) != PGRERROR_OK )
-			LOG4CPP_ERROR( logger, "Error setting manual Gain." );
-	}
-
-}
-
-
-
-
-void OpenNI2Component::processImage( Measurement::Timestamp ts, const FlyCapture2::Image& image) {
-	boost::shared_ptr< Vision::Image > pColorImage;
-	boost::shared_ptr< Vision::Image > pGreyImage;
-
-	if ( image.GetPixelFormat() == PIXEL_FORMAT_MONO8 )
-	{
-		pGreyImage.reset(new Vision::Image( image.GetCols(), image.GetRows(), 1, image.GetData() ) );
-		pGreyImage->widthStep = image.GetStride();
-
-		m_outPort.send( Measurement::ImageMeasurement( ts, pGreyImage ) );
-			
-		if ( m_colorOutPort.isConnected() )
-			m_colorOutPort.send( Measurement::ImageMeasurement( ts, pGreyImage->CvtColor( CV_GRAY2RGB, 3 ) ) );
-	} 
-	else if ( image.GetPixelFormat() == PIXEL_FORMAT_RGB8 )
-	{
-		pColorImage.reset(new Vision::Image( image.GetCols(), image.GetRows(), 3, image.GetData() ) );
-		pColorImage->widthStep = image.GetStride();
-
-		if ( m_colorOutPort.isConnected() )
-			m_colorOutPort.send( Measurement::ImageMeasurement( ts, pColorImage ) );
-		if ( m_outPort.isConnected() )
-			m_outPort.send( Measurement::ImageMeasurement( ts, pColorImage->CvtColor( CV_RGB2GRAY, 1 ) ) );
-	} 
-	else if ( image.GetPixelFormat() == PIXEL_FORMAT_RAW8 )
-	{
-		// convert RAW image to RGB8
-		FlyCapture2::Image convertedImage;
-		image.Convert(PIXEL_FORMAT_RGB, &convertedImage);
-
-		pColorImage.reset(new Vision::Image( convertedImage.GetCols(), convertedImage.GetRows(), 3, convertedImage.GetData() ) );
-		pColorImage->widthStep = convertedImage.GetStride();
-
-		if ( m_colorOutPort.isConnected() )
-			m_colorOutPort.send( Measurement::ImageMeasurement( ts, pColorImage ) );
-		if ( m_outPort.isConnected() )
-			m_outPort.send( Measurement::ImageMeasurement( ts, pColorImage->CvtColor( CV_RGB2GRAY, 1 ) ) );
-	} 
-	else {
-		LOG4CPP_DEBUG( logger, "UNKOWN PIXEL FORMAT: " << image.GetPixelFormat() );	
-	}
 }
 
 UBITRACK_REGISTER_COMPONENT( Dataflow::ComponentFactory* const cf ) {
