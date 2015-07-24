@@ -53,32 +53,33 @@ using namespace Ubitrack::Drivers;
 using namespace openni;
 
 // static int to initialize/deinitialize openni only once.
-bool OpenNI2Module::m_openni_initialized_count = 0;
+unsigned int OpenNI2Module::m_openni_initialized_count = 0;
 
-OpenNI2Module::OpenNI2Module( const OpenNi2ModuleKey& moduleKey, boost::shared_ptr< Graph::UTQLSubgraph > subgraph, FactoryHelper* pFactory )
-        : Module< OpenNi2ModuleKey, OpenNI2ComponentKey, OpenNI2Module, OpenNI2Component >( moduleKey, pFactory )
+OpenNI2Module::OpenNI2Module( const OpenNI2ModuleKey& moduleKey, boost::shared_ptr< Graph::UTQLSubgraph > subgraph, FactoryHelper* pFactory )
+        : Module< OpenNI2ModuleKey, OpenNI2ComponentKey, OpenNI2Module, OpenNI2Component >( moduleKey, pFactory )
 		, m_device_url(m_moduleKey.get())
 		, m_timeout( 2000 ) // 2000ms
         , m_bStop(false)
 {
-	if (m_openni_initialized == 0) {
+	if (m_openni_initialized_count == 0) {
 		Status rc = OpenNI::initialize();
 		if (rc != STATUS_OK)
 		{
-			UBITRACK_THROW( "OpenNI2 Initialize failed: " + OpenNI::getExtendedError() );
+			LOG4CPP_ERROR( logger, "OpenNI2 Initialize failed: " << OpenNI::getExtendedError() );
+			UBITRACK_THROW( "OpenNI2 Initialize failed" );
 		}
 	}
 	m_openni_initialized_count++;
 }
 
-OpenNI2Module::startModule() {
+void OpenNI2Module::startModule() {
 
 	// start thread immediately - it will not send images if the module is not running ..
 	m_Thread.reset( new boost::thread( boost::bind( &OpenNI2Module::ThreadProc, this ) ) );
 
 }
 
-OpenNI2Module::stopModule() {
+void OpenNI2Module::stopModule() {
 	// may need a lock here ...
 	if ( m_Thread )
 	{
@@ -96,12 +97,8 @@ OpenNI2Module::~OpenNI2Module()
 
 	m_openni_initialized_count--;
 
-	if (m_openni_initialized == 0) {
-		Status rc = OpenNI::shutdown();
-		if (rc != STATUS_OK)
-		{
-			LOG4CPP_ERROR( logger, "OpenNI2 Shutdown failed: " + OpenNI::getExtendedError() );
-		}
+	if (m_openni_initialized_count == 0) {
+		OpenNI::shutdown();
 	}
 
 }
@@ -119,7 +116,7 @@ void OpenNI2Module::ThreadProc()
 	Status rc = m_device.open(devurl);
 	if (rc != STATUS_OK)
 	{
-		LOG4CPP_ERROR( logger, "Couldn't open device: " + OpenNI::getExtendedError() );
+		LOG4CPP_ERROR( logger, "Couldn't open device: " << OpenNI::getExtendedError() );
 		return;
 	}
 
@@ -133,10 +130,10 @@ void OpenNI2Module::ThreadProc()
 		if (m_device.getSensorInfo((*it)->getKey().getSensorType()) != NULL) {
 			VideoStream* stream = new VideoStream();
 
-			rc = stream->create(device, (*it)->getKey().getSensorType());
+			rc = stream->create(m_device, (*it)->getKey().getSensorType());
 			if (rc == STATUS_OK)
 			{
-				rc = depth->start();
+				rc = stream->start();
 				if (rc != STATUS_OK)
 				{
 					LOG4CPP_ERROR( logger, "Couldn't start the stream" << std::endl << OpenNI::getExtendedError());
@@ -169,7 +166,7 @@ void OpenNI2Module::ThreadProc()
 
 		if (rc != STATUS_OK)
 		{
-			LOG4CPP_WARN( logger, "Wait failed! " + OpenNI::getExtendedError());
+			LOG4CPP_WARN( logger, "Wait failed! " << OpenNI::getExtendedError());
 			break;
 		}
 
@@ -237,6 +234,12 @@ void OpenNI2Component::processImage( Measurement::Timestamp ts, const openni::Vi
 
 	}
 
+}
+
+std::ostream& operator<<( std::ostream& s, const OpenNI2ComponentKey& k )
+{
+	s << "OpenNI2Component[ " << k.getSensorType()  << " ]";
+	return s;
 }
 
 UBITRACK_REGISTER_COMPONENT( Dataflow::ComponentFactory* const cf ) {

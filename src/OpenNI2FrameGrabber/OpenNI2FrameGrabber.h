@@ -136,7 +136,7 @@ public:
 		: m_sensor_type( a )
  	{}
 	
-	unsigned int  getSensorType() const {
+	openni::SensorType  getSensorType() const {
 		return m_sensor_type;
 	}
 
@@ -157,11 +157,11 @@ protected:
  * Does all the work
  */
 class OpenNI2Module
-	: public Module< OpenNi2ModuleKey, OpenNI2ComponentKey, OpenNI2Module, OpenNI2Component >
+	: public Module< OpenNI2ModuleKey, OpenNI2ComponentKey, OpenNI2Module, OpenNI2Component >
 {
 public:
 	/** UTQL constructor */
-	OpenNI2Module( const OpenNi2ModuleKey& key, boost::shared_ptr< Graph::UTQLSubgraph >, FactoryHelper* pFactory );
+	OpenNI2Module( const OpenNI2ModuleKey& key, boost::shared_ptr< Graph::UTQLSubgraph >, FactoryHelper* pFactory );
 
 	/** destructor */
 	~OpenNI2Module();
