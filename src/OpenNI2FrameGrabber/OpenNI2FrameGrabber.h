@@ -111,7 +111,7 @@ using namespace Dataflow;
 // forward declaration
 class OpenNI2Component;
 
-MAKE_NODEATTRIBUTEKEY_DEFAULT( OpenNI2ModuleKey, std::string, "OpenNI2", "deviceUrl", "" );
+MAKE_NODEATTRIBUTEKEY_DEFAULT( OpenNI2ModuleKey, std::string, "Camera", "deviceUrl", "" );
 
 /**
  * Component key for openni2.

@@ -206,8 +206,8 @@ void OpenNI2Component::processImage( Measurement::Timestamp ts, const openni::Vi
 	{
 		case PIXEL_FORMAT_DEPTH_1_MM:
 		case PIXEL_FORMAT_DEPTH_100_UM:
-
-			pImage.reset(new Vision::Image(frame.getWidth(), frame.getHeight(), 1));
+		case PIXEL_FORMAT_GRAY16:
+			pImage.reset(new Vision::Image(frame.getWidth(), frame.getHeight(), 1, IPL_DEPTH_16U));
 			pImage->origin = 0;
 			memcpy(pImage->imageData, (unsigned char*)frame.getData(), frame.getWidth() * frame.getHeight() * 1);
 			new_image_data = true;
@@ -215,7 +215,7 @@ void OpenNI2Component::processImage( Measurement::Timestamp ts, const openni::Vi
 
 
 		case PIXEL_FORMAT_RGB888:
-			pImage.reset(new Vision::Image(frame.getWidth(), frame.getHeight(), 3));
+			pImage.reset(new Vision::Image(frame.getWidth(), frame.getHeight(), 3, IPL_DEPTH_8U));
 			pImage->origin = 0;
 			pImage->channelSeq[0] = 'R';
 			pImage->channelSeq[1] = 'G';
@@ -224,7 +224,7 @@ void OpenNI2Component::processImage( Measurement::Timestamp ts, const openni::Vi
 			new_image_data = true;
 			break;
 		default:
-			printf("Unknown format\n");
+			LOG4CPP_WARN( logger, "Unknown pixel format: " << frame.getVideoMode().getPixelFormat());
 	}
 
 	// undistort and process here ..
