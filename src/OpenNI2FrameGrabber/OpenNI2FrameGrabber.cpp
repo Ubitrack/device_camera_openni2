@@ -208,19 +208,19 @@ void OpenNI2Component::processImage( Measurement::Timestamp ts, const openni::Vi
 		case PIXEL_FORMAT_DEPTH_100_UM:
 		case PIXEL_FORMAT_GRAY16:
 			pImage.reset(new Vision::Image(frame.getWidth(), frame.getHeight(), 1, IPL_DEPTH_16U));
-			pImage->origin = 0;
-			memcpy(pImage->imageData, (unsigned char*)frame.getData(), frame.getWidth() * frame.getHeight() * 1);
+			pImage->iplImage()->origin = 0;
+			memcpy(pImage->iplImage()->imageData, (unsigned char*)frame.getData(), frame.getWidth() * frame.getHeight() * 1);
 			new_image_data = true;
 			break;
 
 
 		case PIXEL_FORMAT_RGB888:
 			pImage.reset(new Vision::Image(frame.getWidth(), frame.getHeight(), 3, IPL_DEPTH_8U));
-			pImage->origin = 0;
-			pImage->channelSeq[0] = 'R';
-			pImage->channelSeq[1] = 'G';
-			pImage->channelSeq[2] = 'B';
-			memcpy(pImage->imageData, (unsigned char*)frame.getData(), frame.getWidth() * frame.getHeight() * 3);
+			pImage->iplImage()->origin = 0;
+			pImage->iplImage()->channelSeq[0] = 'R';
+			pImage->iplImage()->channelSeq[1] = 'G';
+			pImage->iplImage()->channelSeq[2] = 'B';
+			memcpy(pImage->iplImage()->imageData, (unsigned char*)frame.getData(), frame.getWidth() * frame.getHeight() * 3);
 			new_image_data = true;
 			break;
 		default:
