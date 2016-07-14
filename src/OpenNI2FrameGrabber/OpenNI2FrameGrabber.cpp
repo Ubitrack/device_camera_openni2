@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <utDataflow/ComponentFactory.h>
 #include <utUtil/OS.h>
+#include <utUtil/TracingProvider.h>
 #include <boost/array.hpp>
 
 #include <log4cpp/Category.hh>
@@ -226,6 +227,11 @@ void OpenNI2Component::processImage( Measurement::Timestamp ts, const openni::Vi
 		default:
 			LOG4CPP_WARN( logger, "Unknown pixel format: " << frame.getVideoMode().getPixelFormat());
 	}
+
+
+#ifdef ENABLE_EVENT_TRACING
+	TRACEPOINT_MEASUREMENT_CREATE(getEventDomain(), ts, getName().c_str(), "VideoCapture")
+#endif
 
 	// undistort and process here ..
 
